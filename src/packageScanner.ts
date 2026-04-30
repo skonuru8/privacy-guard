@@ -1,8 +1,12 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { callClaude } from "./claude";
+import { callAI, getAIConfig } from "./aiClient";
 
+/**
+ * System prompt that instructs the AI to act as a privacy expert
+ * and return a strictly structured JSON array for package scoring.
+ */
 const SYSTEM_PROMPT = `You are a privacy expert analyzing npm dependencies.
 
 Score each package for privacy risk based on:
@@ -24,6 +28,7 @@ Respond ONLY with a raw JSON array — no markdown, no explanation:
   }
 ]`;
 
+/** Privacy risk score for a single npm package. */
 export interface PackageResult {
   name: string;
   version: string;
@@ -33,7 +38,17 @@ export interface PackageResult {
   regulation: string | null;
 }
 
-export async function scanPackages(apiKey: string): Promise<PackageResult[]> {
+/**
+ * Reads the workspace's package.json, extracts all dependencies,
+ * and asks the configured AI model to score each one for privacy risk.
+ *
+ * Merges both `dependencies` and `devDependencies` into a single list
+ * before sending to the model.
+ *
+ * @returns An array of PackageResult, one per dependency
+ * @throws If no package.json is found or the workspace has no dependencies
+ */
+export async function scanPackages(): Promise<PackageResult[]> {
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (!workspaceFolders) {
     throw new Error("No workspace open");
@@ -51,11 +66,14 @@ export async function scanPackages(apiKey: string): Promise<PackageResult[]> {
     throw new Error("No dependencies found in package.json");
   }
 
+  /** Format each dep as "name@version" for the prompt */
   const depList = Object.entries(deps)
     .map(([name, version]) => `${name}@${version}`)
     .join("\n");
 
-  const response = await callClaude(
+  const { provider, apiKey } = getAIConfig();
+  const response = await callAI(
+    provider,
     apiKey,
     SYSTEM_PROMPT,
     `Score these npm packages for privacy risk:\n\n${depList}`

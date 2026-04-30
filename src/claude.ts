@@ -1,5 +1,4 @@
 import * as https from "https";
-import type { IncomingMessage } from "http";
 
 export async function callClaude(
   apiKey: string,
@@ -26,11 +25,9 @@ export async function callClaude(
           "Content-Length": Buffer.byteLength(body),
         },
       },
-      (res: IncomingMessage) => {
+      (res) => {
         let data = "";
-        res.on("data", (chunk: Buffer) => {
-          data += chunk.toString("utf8");
-        });
+        res.on("data", (chunk) => (data += chunk));
         res.on("end", () => {
           try {
             const parsed = JSON.parse(data);

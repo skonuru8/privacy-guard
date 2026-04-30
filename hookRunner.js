@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 /**
  * Privacy Guard Hook Runner
- * Called by .git/hooks/pre-commit on every git commit.
- * Reads the API key from VS Code settings, checks the staged diff,
- * prints results to the terminal, and exits 1 if HIGH risk issues found.
+ *
+ * Standalone Node script called by .git/hooks/pre-commit on every git commit.
+ * Reads AI config from VS Code settings or environment variables,
+ * analyzes the staged diff, and exits 1 (blocking the commit) if HIGH risk is found.
+ *
+ * Does NOT depend on VS Code being open — runs entirely in the terminal.
  */
 
 "use strict";
@@ -14,84 +17,133 @@ const fs = require("fs");
 const path = require("path");
 const os = require("os");
 
-// ── Resolve API key ──────────────────────────────────────────────────────────
-// Try env var first (CI/CD), then VS Code global settings file
-function getApiKey() {
+// ── Read AI config ────────────────────────────────────────────────────────────
+/**
+ * Resolves the AI provider and API key.
+ * Checks environment variables first (useful for CI/CD),
+ * then falls back to reading the VS Code user settings.json from disk.
+ *
+ * @returns {{ provider: string|null, apiKey: string|null }}
+ */
+function getAIConfig() {
   if (process.env.PRIVACY_GUARD_API_KEY) {
-    return process.env.PRIVACY_GUARD_API_KEY;
+    return {
+      provider: process.env.PRIVACY_GUARD_PROVIDER || "anthropic",
+      apiKey: process.env.PRIVACY_GUARD_API_KEY,
+    };
   }
 
-  // VS Code stores settings in OS-specific paths
   const settingsPaths = [
-    path.join(os.homedir(), ".config/Code/User/settings.json"),               // Linux
+    path.join(os.homedir(), ".config/Code/User/settings.json"),                     // Linux
     path.join(os.homedir(), "Library/Application Support/Code/User/settings.json"), // macOS
-    path.join(os.homedir(), "AppData/Roaming/Code/User/settings.json"),        // Windows
-    path.join(os.homedir(), ".config/Code - Insiders/User/settings.json"),     // Insiders Linux
+    path.join(os.homedir(), "AppData/Roaming/Code/User/settings.json"),              // Windows
+    path.join(os.homedir(), ".config/Code - Insiders/User/settings.json"),           // VS Code Insiders
   ];
 
   for (const p of settingsPaths) {
     if (fs.existsSync(p)) {
       try {
-        const settings = JSON.parse(fs.readFileSync(p, "utf8"));
-        if (settings["privacyGuard.apiKey"]) {
-          return settings["privacyGuard.apiKey"];
+        const s = JSON.parse(fs.readFileSync(p, "utf8"));
+        if (s["privacyGuard.apiKey"]) {
+          return {
+            provider: s["privacyGuard.provider"] || "anthropic",
+            apiKey: s["privacyGuard.apiKey"],
+            openRouterModel: s["privacyGuard.openRouterModel"] || "mistralai/mistral-7b-instruct",
+          };
         }
-      } catch {
-        // malformed settings, try next
-      }
+      } catch { /* malformed JSON — try next path */ }
     }
   }
 
-  return null;
+  return { provider: null, apiKey: null };
 }
 
-// ── Get staged diff ──────────────────────────────────────────────────────────
+// ── Get staged diff ───────────────────────────────────────────────────────────
+/**
+ * Returns the staged git diff (what's about to be committed).
+ * Returns an empty string if nothing is staged or git fails.
+ */
 function getStagedDiff() {
   try {
-    const diff = execSync("git diff --cached", { encoding: "utf8" });
-    return diff.trim();
+    return execSync("git diff --cached", { encoding: "utf8" }).trim();
   } catch {
     return "";
   }
 }
 
-// ── Call Claude API ──────────────────────────────────────────────────────────
-function callClaude(apiKey, diff) {
-  const SYSTEM = `You are a privacy engineer doing a pre-commit review.
-Analyze the diff for: PII collection, sensitive data logging, third-party data sharing, missing consent, insecure transmission.
-Respond ONLY with raw JSON:
-{
-  "overall_risk": "LOW"|"MEDIUM"|"HIGH",
-  "summary": "one sentence",
-  "issues": [
-    {
-      "file": "filename",
-      "severity": "LOW"|"MEDIUM"|"HIGH",
-      "issue": "what the problem is",
-      "fix": "concrete fix",
-      "regulation": "GDPR Article X or null"
-    }
-  ]
-}`;
-
+// ── Call Anthropic ────────────────────────────────────────────────────────────
+/**
+ * Sends a prompt to the Anthropic Messages API and returns the text response.
+ *
+ * @param {string} apiKey
+ * @param {string} system - System prompt
+ * @param {string} user   - User message
+ * @returns {Promise<string>}
+ */
+function callAnthropic(apiKey, system, user) {
   const body = JSON.stringify({
     model: "claude-sonnet-4-20250514",
     max_tokens: 1500,
-    system: SYSTEM,
-    messages: [{ role: "user", content: `Review this diff:\n\n${diff}` }],
+    system,
+    messages: [{ role: "user", content: user }],
   });
 
+  return httpsPost(
+    { hostname: "api.anthropic.com", path: "/v1/messages",
+      headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" } },
+    body,
+    (p) => { if (p.error) throw new Error(p.error.message); return p.content[0].text; }
+  );
+}
+
+// ── Call OpenAI ───────────────────────────────────────────────────────────────
+/**
+ * Sends a prompt to the OpenAI Chat Completions API and returns the text response.
+ *
+ * @param {string} apiKey
+ * @param {string} system - System prompt (sent as a "system" role message)
+ * @param {string} user   - User message
+ * @returns {Promise<string>}
+ */
+function callOpenAI(apiKey, system, user) {
+  const body = JSON.stringify({
+    model: "gpt-4o",
+    max_tokens: 1500,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  });
+
+  return httpsPost(
+    { hostname: "api.openai.com", path: "/v1/chat/completions",
+      headers: { Authorization: `Bearer ${apiKey}` } },
+    body,
+    (p) => { if (p.error) throw new Error(p.error.message); return p.choices[0].message.content; }
+  );
+}
+
+// ── Shared HTTPS POST ─────────────────────────────────────────────────────────
+/**
+ * Generic HTTPS POST helper shared by all provider implementations.
+ * Handles buffering, JSON parsing, and error propagation.
+ *
+ * @param {{ hostname: string, path: string, headers: object }} opts
+ * @param {string} body         - JSON-serialized request body
+ * @param {Function} extractText - Provider-specific response parser
+ * @returns {Promise<string>}
+ */
+function httpsPost(opts, body, extractText) {
   return new Promise((resolve, reject) => {
     const req = https.request(
       {
-        hostname: "api.anthropic.com",
-        path: "/v1/messages",
+        hostname: opts.hostname,
+        path: opts.path,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
           "Content-Length": Buffer.byteLength(body),
+          ...opts.headers,
         },
       },
       (res) => {
@@ -99,12 +151,9 @@ Respond ONLY with raw JSON:
         res.on("data", (c) => (data += c));
         res.on("end", () => {
           try {
-            const parsed = JSON.parse(data);
-            if (parsed.error) return reject(new Error(parsed.error.message));
-            const text = parsed.content[0].text.replace(/```json|```/g, "").trim();
-            resolve(JSON.parse(text));
+            resolve(extractText(JSON.parse(data)));
           } catch (e) {
-            reject(new Error("Failed to parse API response"));
+            reject(new Error("Failed to parse API response: " + e.message));
           }
         });
       }
@@ -115,76 +164,143 @@ Respond ONLY with raw JSON:
   });
 }
 
-// ── Pretty print results ─────────────────────────────────────────────────────
+// ── Call OpenRouter ───────────────────────────────────────────────────────────
+/**
+ * Sends a prompt to the OpenRouter API.
+ * OpenRouter is OpenAI-compatible and routes to hundreds of models.
+ * Model is read from PRIVACY_GUARD_OPENROUTER_MODEL env var or defaults to mistral-7b.
+ * Requires HTTP-Referer header to identify the app to OpenRouter.
+ *
+ * @param {string} apiKey
+ * @param {string} system
+ * @param {string} user
+ * @returns {Promise<string>}
+ */
+function callOpenRouter(apiKey, system, user) {
+  const model = process.env.PRIVACY_GUARD_OPENROUTER_MODEL || "mistralai/mistral-7b-instruct";
+  const body = JSON.stringify({
+    model,
+    max_tokens: 1500,
+    messages: [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ],
+  });
+
+  return httpsPost(
+    {
+      hostname: "openrouter.ai",
+      path: "/api/v1/chat/completions",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "HTTP-Referer": "https://github.com/consenterra/privacy-guard",
+        "X-Title": "Privacy Guard",
+      },
+    },
+    body,
+    (p) => { if (p.error) throw new Error(p.error.message); return p.choices[0].message.content; }
+  );
+}
+
+
+/**
+ * Routes the AI call to the correct provider based on the `provider` string.
+ *
+ * @param {string} provider - "anthropic" | "openai"
+ * @param {string} apiKey
+ * @param {string} system
+ * @param {string} user
+ * @returns {Promise<string>}
+ */
+function callAI(provider, apiKey, system, user) {
+  switch (provider) {
+    case "openai":      return callOpenAI(apiKey, system, user);
+    case "openrouter":  return callOpenRouter(apiKey, system, user);
+    case "anthropic":   return callAnthropic(apiKey, system, user);
+    default:            return callAnthropic(apiKey, system, user);
+  }
+}
+
+// ── Print results to terminal ─────────────────────────────────────────────────
+/**
+ * Pretty-prints the privacy analysis results to stdout using ANSI colors.
+ * Lists each issue with its file, severity, problem description, fix, and regulation.
+ *
+ * @param {{ overall_risk: string, summary: string, issues: Array }} result
+ */
 function printResults(result) {
-  const RESET = "\x1b[0m";
-  const BOLD = "\x1b[1m";
-  const RED = "\x1b[31m";
-  const YELLOW = "\x1b[33m";
-  const GREEN = "\x1b[32m";
-  const DIM = "\x1b[2m";
-  const CYAN = "\x1b[36m";
+  const R = "\x1b[0m", B = "\x1b[1m", RED = "\x1b[31m",
+        YEL = "\x1b[33m", GRN = "\x1b[32m", DIM = "\x1b[2m", CYN = "\x1b[36m";
+  const riskColor = { LOW: GRN, MEDIUM: YEL, HIGH: RED };
 
-  const riskColor = { LOW: GREEN, MEDIUM: YELLOW, HIGH: RED }[result.overall_risk];
-
-  console.log(`\n${BOLD}🛡️  Privacy Guard Pre-Commit Check${RESET}`);
-  console.log(`${"─".repeat(44)}`);
-  console.log(`${BOLD}Overall Risk:${RESET} ${riskColor}${result.overall_risk}${RESET}`);
-  console.log(`${DIM}${result.summary}${RESET}\n`);
+  console.log(`\n${B}Privacy Guard Pre-Commit Check${R}`);
+  console.log("─".repeat(40));
+  console.log(`${B}Risk:${R} ${riskColor[result.overall_risk]}${result.overall_risk}${R}`);
+  console.log(`${DIM}${result.summary}${R}\n`);
 
   if (!result.issues || result.issues.length === 0) {
-    console.log(`${GREEN}✅ No privacy issues found. Proceeding with commit.${RESET}\n`);
+    console.log(`${GRN}No privacy issues found. Safe to commit.${R}\n`);
     return;
   }
 
   result.issues.forEach((issue, i) => {
-    const color = { LOW: GREEN, MEDIUM: YELLOW, HIGH: RED }[issue.severity];
-    console.log(`${BOLD}Issue ${i + 1}${RESET} — ${CYAN}${issue.file}${RESET} [${color}${issue.severity}${RESET}]`);
-    console.log(`  ${RED}Problem:${RESET} ${issue.issue}`);
-    console.log(`  ${GREEN}Fix:${RESET}     ${issue.fix}`);
-    if (issue.regulation) {
-      console.log(`  ${DIM}⚖️  ${issue.regulation}${RESET}`);
-    }
+    const c = riskColor[issue.severity];
+    console.log(`${B}Issue ${i + 1}${R} — ${CYN}${issue.file}${R} [${c}${issue.severity}${R}]`);
+    console.log(`  ${RED}Problem:${R} ${issue.issue}`);
+    console.log(`  ${GRN}Fix:${R}     ${issue.fix}`);
+    if (issue.regulation) console.log(`  ${DIM}${issue.regulation}${R}`);
     console.log();
   });
 }
 
-// ── Main ─────────────────────────────────────────────────────────────────────
+// ── System prompt ─────────────────────────────────────────────────────────────
+const SYSTEM = `You are a privacy engineer doing a pre-commit review.
+Analyze the diff for: PII collection, sensitive data logging, third-party data sharing, missing consent, insecure transmission.
+Respond ONLY with raw JSON:
+{
+  "overall_risk": "LOW"|"MEDIUM"|"HIGH",
+  "summary": "one sentence",
+  "issues": [{ "file": "filename", "severity": "LOW"|"MEDIUM"|"HIGH", "issue": "problem", "fix": "fix", "regulation": "GDPR Article X or null" }]
+}`;
+
+// ── Main ──────────────────────────────────────────────────────────────────────
+/**
+ * Entry point. Reads config, fetches the diff, calls the AI, prints results,
+ * and exits 1 to block the commit if overall_risk is HIGH.
+ * Always exits 0 on config/tool failure so the commit is never blocked unintentionally.
+ */
 async function main() {
-  const apiKey = getApiKey();
+  const { provider, apiKey, openRouterModel } = getAIConfig();
 
   if (!apiKey) {
     console.warn(
-      "\n⚠️  Privacy Guard: No API key found.\n" +
-      "   Set privacyGuard.apiKey in VS Code settings, or set PRIVACY_GUARD_API_KEY env var.\n" +
-      "   Skipping privacy check.\n"
+      "\nPrivacy Guard: No API key found. Set privacyGuard.apiKey in VS Code settings\n" +
+      "or export PRIVACY_GUARD_API_KEY=<key>. Skipping check.\n"
     );
-    process.exit(0); // Don't block commit if not configured
+    process.exit(0);
   }
 
   const diff = getStagedDiff();
   if (!diff) {
-    console.log("\n🛡️  Privacy Guard: No staged changes to check.\n");
     process.exit(0);
   }
 
   const trimmed = diff.length > 8000 ? diff.slice(0, 8000) + "\n...(truncated)" : diff;
 
   try {
-    process.stdout.write("\n🛡️  Privacy Guard: Scanning staged changes...");
-    const result = await callClaude(apiKey, trimmed);
+    process.stdout.write(`\nPrivacy Guard [${provider}]: Scanning staged changes...`);
+    if (openRouterModel) process.env.PRIVACY_GUARD_OPENROUTER_MODEL = openRouterModel;
+    const raw = await callAI(provider, apiKey, SYSTEM, `Review this diff:\n\n${trimmed}`);
     process.stdout.write(" done\n");
+
+    const result = JSON.parse(raw.replace(/```json|```/g, "").trim());
     printResults(result);
 
-    // Block commit only on HIGH risk
-    if (result.overall_risk === "HIGH") {
-      process.exit(1);
-    } else {
-      process.exit(0);
-    }
+    // Only block on HIGH — MEDIUM and LOW warn but allow the commit
+    process.exit(result.overall_risk === "HIGH" ? 1 : 0);
   } catch (err) {
-    console.warn(`\n⚠️  Privacy Guard check failed: ${err.message}\n   Skipping — commit will proceed.\n`);
-    process.exit(0); // Never block on tool failure
+    console.warn(`\nPrivacy Guard check failed: ${err.message}\nSkipping — commit will proceed.\n`);
+    process.exit(0);
   }
 }
 
