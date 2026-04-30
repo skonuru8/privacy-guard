@@ -2,21 +2,28 @@
   "name": "privacy-guard",
   "displayName": "Privacy Guard",
   "description": "AI-powered privacy checks before commits and for your dependencies",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "consenterra",
   "repository": {
     "type": "git",
-    "url": "https://github.com/skonuru8/privacy-guard"
+    "url": "https://github.com/consenterra/privacy-guard"
   },
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Linters", "Other"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
   "main": "./out/extension.js",
-  "activationEvents": ["onStartupFinished"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
       {
         "command": "privacyGuard.checkStagedChanges",
-        "title": "Privacy Guard: Check Staged Changes (Pre-Commit)"
+        "title": "Privacy Guard: Check Staged Changes"
       },
       {
         "command": "privacyGuard.scanPackages",
@@ -34,21 +41,35 @@
     "configuration": {
       "title": "Privacy Guard",
       "properties": {
-        "privacyGuard.apiKey": {
+        "privacyGuard.anthropicApiKey": {
           "type": "string",
           "default": "",
-          "description": "API key for the selected provider. Anthropic: console.anthropic.com — OpenAI: platform.openai.com — OpenRouter: openrouter.ai/keys"
+          "description": "Anthropic API key. Get one at https://console.anthropic.com"
+        },
+        "privacyGuard.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key. Get one at https://platform.openai.com/api-keys"
+        },
+        "privacyGuard.openrouterApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenRouter API key. Get one at https://openrouter.ai/keys"
         },
         "privacyGuard.provider": {
           "type": "string",
-          "enum": ["anthropic", "openai", "openrouter"],
+          "enum": [
+            "anthropic",
+            "openai",
+            "openrouter"
+          ],
+          "default": "anthropic",
+          "description": "AI provider to use. Set apiKey to match the chosen provider.",
           "enumDescriptions": [
             "Anthropic Claude (claude-sonnet-4-20250514)",
             "OpenAI (gpt-4o)",
             "OpenRouter — access hundreds of models with one key"
-          ],
-          "default": "anthropic",
-          "description": "AI provider to use for privacy analysis. Set apiKey to match the chosen provider."
+          ]
         },
         "privacyGuard.openRouterModel": {
           "type": "string",

@@ -44,10 +44,17 @@ function getAIConfig() {
     if (fs.existsSync(p)) {
       try {
         const s = JSON.parse(fs.readFileSync(p, "utf8"));
-        if (s["privacyGuard.apiKey"]) {
+        const provider = s["privacyGuard.provider"] || "anthropic";
+        const keyMap = {
+          anthropic:  s["privacyGuard.anthropicApiKey"] || "",
+          openai:     s["privacyGuard.openaiApiKey"] || "",
+          openrouter: s["privacyGuard.openrouterApiKey"] || "",
+        };
+        const apiKey = keyMap[provider] || "";
+        if (apiKey) {
           return {
-            provider: s["privacyGuard.provider"] || "anthropic",
-            apiKey: s["privacyGuard.apiKey"],
+            provider,
+            apiKey,
             openRouterModel: s["privacyGuard.openRouterModel"] || "mistralai/mistral-7b-instruct",
           };
         }

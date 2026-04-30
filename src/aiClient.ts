@@ -5,18 +5,29 @@ import * as vscode from "vscode";
 export type AIProvider = "anthropic" | "openai" | "openrouter";
 
 /**
- * Reads the configured AI provider and API key from VS Code settings.
- * Throws if the API key is not set.
+ * Reads the configured AI provider and its corresponding API key from VS Code settings.
+ * Each provider has its own dedicated key field so users can store all keys simultaneously
+ * and switch providers without re-entering credentials.
+ *
  * @returns An object with the resolved provider and apiKey
+ * @throws If the API key for the selected provider is not set
  */
 export function getAIConfig(): { provider: AIProvider; apiKey: string } {
   const config = vscode.workspace.getConfiguration("privacyGuard");
   const provider = config.get<AIProvider>("provider", "anthropic");
-  const apiKey = config.get<string>("apiKey", "");
+
+  const keyMap: Record<AIProvider, string> = {
+    anthropic:  config.get<string>("anthropicApiKey", ""),
+    openai:     config.get<string>("openaiApiKey", ""),
+    openrouter: config.get<string>("openrouterApiKey", ""),
+  };
+
+  const apiKey = keyMap[provider];
 
   if (!apiKey) {
     throw new Error(
-      "No API key set. Open Settings and configure privacyGuard.apiKey."
+      `No API key set for provider "${provider}". ` +
+      `Open Settings and configure privacyGuard.${provider}ApiKey.`
     );
   }
 
