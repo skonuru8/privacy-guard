@@ -1,0 +1,75 @@
+{
+  "name": "privacy-guard",
+  "displayName": "Privacy Guard",
+  "description": "AI-powered privacy checks before commits and for your dependencies",
+  "version": "0.1.0",
+  "publisher": "consenterra",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/consenterra/privacy-guard"
+  },
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Linters", "Other"],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      {
+        "command": "privacyGuard.checkStagedChanges",
+        "title": "Privacy Guard: Check Staged Changes (Pre-Commit)"
+      },
+      {
+        "command": "privacyGuard.scanPackages",
+        "title": "Privacy Guard: Scan Dependencies"
+      }
+    ],
+    "configuration": {
+      "title": "Privacy Guard",
+      "properties": {
+        "privacyGuard.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Anthropic API key. Get one at https://console.anthropic.com"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "privacyGuard",
+          "title": "Privacy Guard",
+          "icon": "$(shield)"
+        }
+      ]
+    },
+    "views": {
+      "privacyGuard": [
+        {
+          "type": "webview",
+          "id": "privacyGuard.panel",
+          "name": "Privacy Guard"
+        }
+      ]
+    },
+    "menus": {
+      "scm/title": [
+        {
+          "command": "privacyGuard.checkStagedChanges",
+          "group": "privacyGuard"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --skip-license"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.3.0"
+  }
+}
