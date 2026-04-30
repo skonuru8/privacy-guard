@@ -45,13 +45,17 @@ export interface DiffResult {
 
 function runGit(args: string, cwd: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    cp.exec(`git ${args}`, { cwd }, (err, stdout, stderr) => {
+    cp.exec(
+      `git ${args}`,
+      { cwd },
+      (err: cp.ExecException | null, stdout: string, stderr: string) => {
       if (err) {
         reject(new Error(stderr || err.message));
       } else {
         resolve(stdout);
       }
-    });
+      }
+    );
   });
 }
 
