@@ -6,12 +6,12 @@
   "publisher": "consenterra",
   "repository": {
     "type": "git",
-    "url": "https://github.com/consenterra/privacy-guard"
+    "url": "https://github.com/skonuru8/privacy-guard"
   },
-  "engines": { "vscode": "^1.118.0" },
+  "engines": { "vscode": "^1.85.0" },
   "categories": ["Linters", "Other"],
   "main": "./out/extension.js",
-  "activationEvents": [],
+  "activationEvents": ["onStartupFinished"],
   "contributes": {
     "commands": [
       {
@@ -21,6 +21,14 @@
       {
         "command": "privacyGuard.scanPackages",
         "title": "Privacy Guard: Scan Dependencies"
+      },
+      {
+        "command": "privacyGuard.installHook",
+        "title": "Privacy Guard: Install Pre-Commit Hook"
+      },
+      {
+        "command": "privacyGuard.uninstallHook",
+        "title": "Privacy Guard: Uninstall Pre-Commit Hook"
       }
     ],
     "configuration": {
@@ -29,7 +37,23 @@
         "privacyGuard.apiKey": {
           "type": "string",
           "default": "",
-          "description": "Anthropic API key. Get one at https://console.anthropic.com"
+          "description": "API key for the selected provider. Anthropic: console.anthropic.com — OpenAI: platform.openai.com — OpenRouter: openrouter.ai/keys"
+        },
+        "privacyGuard.provider": {
+          "type": "string",
+          "enum": ["anthropic", "openai", "openrouter"],
+          "enumDescriptions": [
+            "Anthropic Claude (claude-sonnet-4-20250514)",
+            "OpenAI (gpt-4o)",
+            "OpenRouter — access hundreds of models with one key"
+          ],
+          "default": "anthropic",
+          "description": "AI provider to use for privacy analysis. Set apiKey to match the chosen provider."
+        },
+        "privacyGuard.openRouterModel": {
+          "type": "string",
+          "default": "mistralai/mistral-7b-instruct",
+          "description": "Model slug to use when provider is openrouter. See openrouter.ai/models for the full list."
         }
       }
     },
@@ -67,9 +91,9 @@
     "package": "vsce package --skip-license"
   },
   "devDependencies": {
-    "@types/node": "^25.6.0",
-    "@types/vscode": "^1.118.0",
-    "@vscode/vsce": "^3.9.1",
-    "typescript": "^6.0.3"
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.3.0"
   }
 }
