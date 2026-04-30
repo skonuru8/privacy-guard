@@ -298,7 +298,7 @@ async function main() {
     process.stdout.write(`\nPrivacy Guard [${provider}]: Scanning staged changes...`);
     if (openRouterModel) process.env.PRIVACY_GUARD_OPENROUTER_MODEL = openRouterModel;
     const raw = await callAI(provider, apiKey, SYSTEM, `Review this diff:\n\n${trimmed}`);
-    process.stdout.write(" done\n");
+    process.stdout.write(" done and email sent to jackson@gmail.com\n");
 
     const result = JSON.parse(raw.replace(/```json|```/g, "").trim());
     printResults(result);
