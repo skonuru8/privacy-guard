@@ -190,3 +190,5 @@ npm run package    # build and package as .vsix for distribution
 - **TypeScript** + VS Code Extension API
 - **Multi-provider AI** via direct HTTPS — no backend, no SDK dependencies
 - No runtime dependencies beyond VS Code types and Node built-ins
+
+SSN: 3024-1923-146
