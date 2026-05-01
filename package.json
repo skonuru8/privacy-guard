@@ -71,6 +71,16 @@
             "OpenRouter — access hundreds of models with one key"
           ]
         },
+        "privacyGuard.anthropicModel": {
+          "type": "string",
+          "default": "claude-sonnet-4-20250514",
+          "description": "Model ID to use when provider is anthropic. See docs.anthropic.com/en/docs/about-claude/models for the full list."
+        },
+        "privacyGuard.openaiModel": {
+          "type": "string",
+          "default": "gpt-4o",
+          "description": "Model ID to use when provider is openai. See platform.openai.com/docs/models for the full list."
+        },
         "privacyGuard.openRouterModel": {
           "type": "string",
           "default": "mistralai/mistral-7b-instruct",
@@ -126,20 +136,12 @@
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "package": "vsce package --skip-license",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:coverage": "jest --coverage",
-    "test:unit": "jest src/test",
-    "test:fixtures": "jest test-fixtures"
+    "package": "vsce package --skip-license"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",
-    "@types/vscode": "^1.118.0",
-    "@vscode/vsce": "^3.9.1",
-    "@types/jest": "^30.0.0",
-    "jest": "^30.3.0",
-    "ts-jest": "^29.4.9",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
     "typescript": "^6.0.3"
   }
 }

@@ -37,6 +37,8 @@ function getAIConfig() {
     return {
       provider: process.env.PRIVACY_GUARD_PROVIDER || "anthropic",
       apiKey:   process.env.PRIVACY_GUARD_API_KEY,
+      anthropicModel:  process.env.PRIVACY_GUARD_ANTHROPIC_MODEL  || "claude-sonnet-4-20250514",
+      openaiModel:     process.env.PRIVACY_GUARD_OPENAI_MODEL     || "gpt-4o",
       openRouterModel: process.env.PRIVACY_GUARD_OPENROUTER_MODEL || "mistralai/mistral-7b-instruct",
     };
   }
@@ -61,12 +63,14 @@ function getAIConfig() {
         const apiKey = keyMap[provider] || "";
         if (apiKey) {
           return { provider, apiKey,
+            anthropicModel:  s["privacyGuard.anthropicModel"]  || "claude-sonnet-4-20250514",
+            openaiModel:     s["privacyGuard.openaiModel"]     || "gpt-4o",
             openRouterModel: s["privacyGuard.openRouterModel"] || "mistralai/mistral-7b-instruct" };
         }
       } catch { /* malformed — try next */ }
     }
   }
-  return { provider: null, apiKey: null, openRouterModel: null };
+  return { provider: null, apiKey: null, anthropicModel: null, openaiModel: null, openRouterModel: null };
 }
 
 // ── Triage ────────────────────────────────────────────────────────────────────
@@ -465,16 +469,16 @@ Respond ONLY with raw JSON:
   "issues": [{ "file": "filename", "line_hint": "snippet", "severity": "LOW"|"MEDIUM"|"HIGH", "issue": "problem", "fix": "fix", "regulation": "GDPR Article X or null" }]
 }`;
 
-function callAnthropic(apiKey, filePath, diff) {
-  const body = JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1500, system: SYSTEM,
+function callAnthropic(apiKey, model, filePath, diff) {
+  const body = JSON.stringify({ model, max_tokens: 1500, system: SYSTEM,
     messages: [{ role: "user", content: `Review this diff for file "${filePath}":\n\n${diff}` }] });
   return httpsPost({ hostname: "api.anthropic.com", path: "/v1/messages",
     headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" } }, body,
     p => { if (p.error) throw new Error(p.error.message); return p.content[0].text; });
 }
 
-function callOpenAI(apiKey, filePath, diff) {
-  const body = JSON.stringify({ model: "gpt-4o", max_tokens: 1500,
+function callOpenAI(apiKey, model, filePath, diff) {
+  const body = JSON.stringify({ model, max_tokens: 1500,
     messages: [{ role: "system", content: SYSTEM }, { role: "user", content: `Review this diff for file "${filePath}":\n\n${diff}` }] });
   return httpsPost({ hostname: "api.openai.com", path: "/v1/chat/completions",
     headers: { Authorization: `Bearer ${apiKey}` } }, body,
@@ -585,13 +589,13 @@ function applyOutboundFilter(diff) {
   return result.redacted;
 }
 
-function callLLM(provider, apiKey, openRouterModel, filePath, diff) {
+function callLLM(provider, apiKey, models, filePath, diff) {
   // Self-defense: scrub the diff before it leaves the machine.
   const safeDiff = applyOutboundFilter(diff);
   switch (provider) {
-    case "openai":     return callOpenAI(apiKey, filePath, safeDiff);
-    case "openrouter": return callOpenRouter(apiKey, openRouterModel, filePath, safeDiff);
-    default:           return callAnthropic(apiKey, filePath, safeDiff);
+    case "openai":     return callOpenAI(apiKey, models.openai, filePath, safeDiff);
+    case "openrouter": return callOpenRouter(apiKey, models.openrouter, filePath, safeDiff);
+    default:           return callAnthropic(apiKey, models.anthropic, filePath, safeDiff);
   }
 }
 
@@ -663,11 +667,12 @@ function printResults(result, stats) {
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  const { provider, apiKey, openRouterModel } = getAIConfig();
+  const { provider, apiKey, anthropicModel, openaiModel, openRouterModel } = getAIConfig();
   if (!apiKey) {
     console.warn("\nPrivacy Guard: No API key found. Skipping check.\n");
     process.exit(0);
   }
+  const models = { anthropic: anthropicModel, openai: openaiModel, openrouter: openRouterModel };
 
   const allFiles  = getStagedFileNames();
   const scannable = allFiles.filter(f => !shouldSkipFile(f));
@@ -709,7 +714,7 @@ async function main() {
 
     // LLM call
     try {
-      const raw = await callLLM(provider, apiKey, openRouterModel, filePath, diff);
+      const raw = await callLLM(provider, apiKey, models, filePath, diff);
       const llmResult = JSON.parse(raw.replace(/```json|```/g, "").trim());
       llmCalls++;
 

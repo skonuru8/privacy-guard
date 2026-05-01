@@ -143,8 +143,10 @@ export async function callAI(
 }
 
 /**
- * Calls the Anthropic Messages API (claude-sonnet-4-20250514).
+ * Calls the Anthropic Messages API.
  * Uses the x-api-key header and anthropic-version required by Anthropic's API.
+ * The model is read from the `privacyGuard.anthropicModel` setting,
+ * defaulting to "claude-sonnet-4-20250514".
  *
  * @param apiKey       - Anthropic API key
  * @param systemPrompt - System instructions
@@ -156,8 +158,11 @@ function callAnthropic(
   systemPrompt: string,
   userMessage: string
 ): Promise<string> {
+  const config = vscode.workspace.getConfiguration("privacyGuard");
+  const model = config.get<string>("anthropicModel", "claude-sonnet-4-20250514");
+
   const body = JSON.stringify({
-    model: "claude-sonnet-4-20250514",
+    model,
     max_tokens: 2000,
     system: systemPrompt,
     messages: [{ role: "user", content: userMessage }],
@@ -181,8 +186,10 @@ function callAnthropic(
 }
 
 /**
- * Calls the OpenAI Chat Completions API (gpt-4o).
+ * Calls the OpenAI Chat Completions API.
  * Uses the Authorization: Bearer header required by OpenAI's API.
+ * The model is read from the `privacyGuard.openaiModel` setting,
+ * defaulting to "gpt-4o".
  *
  * @param apiKey       - OpenAI API key
  * @param systemPrompt - System instructions passed as a system role message
@@ -194,8 +201,11 @@ function callOpenAI(
   systemPrompt: string,
   userMessage: string
 ): Promise<string> {
+  const config = vscode.workspace.getConfiguration("privacyGuard");
+  const model = config.get<string>("openaiModel", "gpt-4o");
+
   const body = JSON.stringify({
-    model: "gpt-4o",
+    model,
     max_tokens: 2000,
     messages: [
       { role: "system", content: systemPrompt },
