@@ -356,12 +356,10 @@ const LOW_RISK_PATH_PATTERNS = [
   /changelog/, /license/, /readme/, /contributing/,
   /\.stories\./, /storybook/,
   /node_modules/,
-  /test.fixture/, /test-fixture/,
-  /hookrunner/,
-  /webpack\.config/, /jest\.config/, /babel\.config/, /vite\.config/,
-  /test.fixture/, /test-fixture/,  // fixture dirs are examples, not real code
-  /hookrunner/,                    // extension infra, not application code
+  /test.fixture/, /test-fixture/,   // test fixture dirs — examples, not real code
+  /hookrunner/,                     // extension infra, not application code
   /webpack\.config/, /jest\.config/, /babel\.config/, /vite\.config/, /rollup\.config/,
+  /nlpscanner/, /diffscanner/, /filecache/, /aiclient/, /hookinstaller/, // extension source
 ];
 
 /**

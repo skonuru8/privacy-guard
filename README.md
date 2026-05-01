@@ -10,17 +10,43 @@ AI-powered privacy analysis built into your development workflow. Catches privac
 
 Automatically runs on every `git commit` via a git hook installed when you open the project. Also triggerable manually at any time.
 
-Every commit runs through a 4-layer pipeline designed to scan every file completely while minimising API cost:
+Every commit runs through a 5-layer pipeline designed to scan every file completely while minimising API cost:
 
 1. **Triage** — skips binaries, lockfiles, minified files, and generated assets instantly
 2. **Cache** — skips files whose diff hasn't changed since the last scan (stored in `.git/privacy-guard-cache.json`)
-3. **NLP** — runs local regex patterns to catch high-confidence issues without an API call
-4. **LLM** — only files that need deeper reasoning are sent to the AI model
+3. **NLP + Entropy** — runs local regex patterns to catch high-confidence issues without an API call; uses Shannon entropy scoring to filter out example/documentation values
+4. **Path risk classification** — classifies each file as HIGH, MEDIUM, or LOW risk based on its path name
+5. **LLM** — only files that need deeper reasoning are sent to the AI model
 
-This means a 26-file commit where most files are clean costs 1–2 API calls instead of truncating everything into one unreadable blob.
+**LLM call decision per file:**
+
+| Condition | LLM called? |
+|---|---|
+| `.md`, `.txt`, `.rst` doc file | Never — NLP secrets-only scan |
+| NLP finds HIGH (secret/hardcoded key) | No — already blocking |
+| NLP finds MEDIUM (tracker/HTTP) | Yes — confirms or escalates |
+| NLP clean + HIGH-risk path (`auth`, `payment`, `user`) | Yes — subtle issues possible |
+| NLP clean + LOW-risk path (`utils`, `tests`, `fixtures`) | No — trust NLP |
+| NLP clean + everything else | Yes — safe default |
+
+**What the NLP layer catches without an API call:**
+
+| Pattern | Severity |
+|---|---|
+| Hardcoded OpenAI / Stripe keys (`sk-...`) | HIGH |
+| AWS Access Key IDs (`AKIA...`) | HIGH |
+| Private keys (`-----BEGIN RSA PRIVATE KEY`) | HIGH |
+| Credentials in connection URLs (`user:pass@host`) | HIGH |
+| GitHub tokens (`ghp_...`, `github_pat_...`) | HIGH |
+| PII fields in `console.log` (email, password, ssn, token) | HIGH |
+| Template literals logging PII (`` `user=${user.email}` ``) | HIGH |
+| Raw password from request body stored without hashing | HIGH |
+| Geolocation accessed without visible consent check | MEDIUM |
+| `fetch()` or `axios` calls over `http://` | MEDIUM |
+| Google Analytics, Mixpanel, Amplitude, Segment calls | MEDIUM |
 
 **What gets flagged:**
-- PII being collected or logged (names, emails, phone numbers, location data, IDs)
+- PII collected or logged (names, emails, phone numbers, location data, IDs)
 - Sensitive data in logs or error messages (passwords, tokens, health data, financial data)
 - Hardcoded secrets and API keys
 - Third-party API calls that share user data without consent
@@ -28,7 +54,7 @@ This means a 26-file commit where most files are clean costs 1–2 API calls ins
 - Insecure data transmission (HTTP instead of HTTPS)
 - Relevant GDPR article or CCPA section for each issue
 
-Each issue is given a severity of `LOW`, `MEDIUM`, or `HIGH`. The commit is blocked only if the overall risk is `HIGH`. `LOW` and `MEDIUM` findings print a warning but allow the commit to proceed. If the API is unreachable or the check fails for any reason, the commit always proceeds — the hook never blocks unintentionally.
+Each issue is given a severity of `LOW`, `MEDIUM`, or `HIGH`. The commit is blocked only if the overall risk is `HIGH`. If the API is unreachable or the check fails for any reason, the commit always proceeds.
 
 **How to trigger:**
 - Automatically on every `git commit` (hook installed on extension activation)
@@ -41,34 +67,18 @@ Privacy Guard [openrouter]: Scanning 8 file(s)... done
 ────────────────────────────────────────
 Risk: HIGH
 Found 2 issue(s) — 1 high, 1 medium.
-Files scanned: 8 | LLM calls: 1 | Cache hits: 3
+Files: 8 | LLM calls: 1 | Cache hits: 3
 
 Issue 1 — auth.js [HIGH]
   Problem: console.log(user.password) exposes credentials in logs
   Fix:     Remove the log or replace with a redacted placeholder
   GDPR Article 5(1)(f) — integrity and confidentiality
 
-Issue 2 — api.js [MEDIUM]
-  Problem: fetch() call uses http:// instead of https://
-  Fix:     Change to https:// to encrypt data in transit
-  GDPR Article 32 — security of processing
-
 ❌ Privacy Guard blocked this commit. Fix the issues above or run:
    git commit --no-verify   (to bypass)
 ```
 
-**What the NLP layer catches without an API call:**
-
-| Pattern | Severity |
-|---|---|
-| Hardcoded OpenAI / Stripe keys (`sk-...`) | HIGH |
-| AWS Access Key IDs (`AKIA...`) | HIGH |
-| Private keys (`-----BEGIN RSA PRIVATE KEY`) | HIGH |
-| Credentials in connection URLs (`user:pass@host`) | HIGH |
-| GitHub tokens (`ghp_...`, `github_pat_...`) | HIGH |
-| PII fields in `console.log` (email, password, ssn, token) | HIGH |
-| `fetch()` or `axios` calls over `http://` | MEDIUM |
-| Google Analytics, Mixpanel, Amplitude, Segment calls | MEDIUM |
+> **Note:** If you intentionally commit files that contain example privacy violations (such as test fixtures), use `git commit --no-verify` to bypass the hook. The scanner correctly identifies these as issues — bypassing is the right approach for known-bad example files.
 
 ---
 
@@ -92,14 +102,27 @@ Each package receives:
 
 The pre-commit hook is installed automatically when the extension activates and a `.git` directory is detected. It will not overwrite any existing hook that Privacy Guard did not create.
 
-If you need to manage the hook manually:
+**Important:** When you update to a new version of the extension, you must reinstall the hook manually — the old hook path points to the previous version's files.
+
+```
+Ctrl+Shift+P → Privacy Guard: Uninstall Pre-Commit Hook
+Ctrl+Shift+P → Privacy Guard: Install Pre-Commit Hook
+```
+
+Verify the hook is pointing to the correct version:
+```bash
+cat .git/hooks/pre-commit
+# Should show consenterra.privacy-guard-0.2.0 (not 0.1.0)
+```
+
+Additional hook commands:
 
 | Command | Description |
 |---|---|
 | `Privacy Guard: Install Pre-Commit Hook` | Installs the hook into `.git/hooks/pre-commit` |
 | `Privacy Guard: Uninstall Pre-Commit Hook` | Removes the hook (only if installed by Privacy Guard) |
 
-The hook runs as a standalone Node script (`hookRunner.js`) and does not require VS Code to be open. The scan results cache is stored in `.git/privacy-guard-cache.json` — it is never committed and requires no `.gitignore` entry.
+The hook runs as a standalone Node script (`hookRunner.js`) — it does not require VS Code to be open. The scan results cache is stored in `.git/privacy-guard-cache.json` and is never committed.
 
 ---
 
@@ -110,7 +133,14 @@ The hook runs as a standalone Node script (`hookRunner.js`) and does not require
 1. Download `privacy-guard-x.x.x.vsix`
 2. In VS Code: `Ctrl+Shift+P` → `Extensions: Install from VSIX`
 3. Select the downloaded file
-4. Configure your API key (see Configuration below)
+4. Open your project folder — the hook installs automatically on activation
+5. Configure your API key (see Configuration below)
+
+**After installing a new version**, always reinstall the hook:
+```
+Ctrl+Shift+P → Privacy Guard: Uninstall Pre-Commit Hook
+Ctrl+Shift+P → Privacy Guard: Install Pre-Commit Hook
+```
 
 ### Install from source
 
@@ -121,7 +151,7 @@ npm install
 code .
 ```
 
-Press `F5` to launch an Extension Development Host with the extension running. Configure your API key in that window.
+Press `F5` to launch an Extension Development Host. Configure your API key in that window.
 
 ---
 
@@ -137,30 +167,30 @@ All settings are under `privacyGuard.*` in VS Code Settings (`Ctrl+Shift+P` → 
 | `privacyGuard.openrouterApiKey` | `string` | — | OpenRouter API key — [openrouter.ai/keys](https://openrouter.ai/keys) |
 | `privacyGuard.openRouterModel` | `string` | `mistralai/mistral-7b-instruct` | Model slug when using OpenRouter |
 
-All three key fields can be filled simultaneously. Switching the `provider` dropdown picks up the correct key automatically — no need to re-enter credentials.
+All three key fields can be filled simultaneously. Switching the `provider` dropdown picks up the correct key automatically.
 
 ### Supported Providers
 
 **Anthropic** (default) — uses `claude-sonnet-4-20250514`
 ```
-privacyGuard.provider       →  anthropic
+privacyGuard.provider        →  anthropic
 privacyGuard.anthropicApiKey →  sk-ant-...
 ```
 
 **OpenAI** — uses `gpt-4o`
 ```
-privacyGuard.provider    →  openai
+privacyGuard.provider     →  openai
 privacyGuard.openaiApiKey →  sk-...
 ```
 
 **OpenRouter** — routes to any model on [openrouter.ai/models](https://openrouter.ai/models)
 ```
-privacyGuard.provider         →  openrouter
+privacyGuard.provider          →  openrouter
 privacyGuard.openrouterApiKey  →  sk-or-...
 privacyGuard.openRouterModel   →  deepseek/deepseek-r1-0528
 ```
 
-Some useful OpenRouter model slugs:
+Useful OpenRouter model slugs:
 
 | Model | Slug |
 |---|---|
@@ -171,8 +201,6 @@ Some useful OpenRouter model slugs:
 | Gemini Flash 1.5 | `google/gemini-flash-1.5` |
 
 ### CI/CD Configuration
-
-The git hook reads from environment variables when VS Code settings are not available:
 
 ```bash
 export PRIVACY_GUARD_PROVIDER=openrouter
@@ -189,8 +217,8 @@ privacy-guard/
 ├── src/
 │   ├── extension.ts        — entry point, registers all commands and the sidebar
 │   ├── aiClient.ts         — multi-provider AI client (Anthropic, OpenAI, OpenRouter)
-│   ├── diffScanner.ts      — 4-layer pipeline: triage → cache → NLP → LLM
-│   ├── nlpScanner.ts       — local regex rules, catches secrets and PII without API calls
+│   ├── diffScanner.ts      — 5-layer pipeline orchestrator
+│   ├── nlpScanner.ts       — local regex + entropy + path risk classification
 │   ├── fileCache.ts        — sha256 diff cache stored in .git/privacy-guard-cache.json
 │   ├── packageScanner.ts   — reads package.json and scores dependencies
 │   ├── hookInstaller.ts    — installs/uninstalls the git pre-commit hook
@@ -204,16 +232,9 @@ privacy-guard/
 
 ## Contributing
 
-Each feature lives in its own file. To add a new scanner:
+To add a new NLP rule, add an entry to the `RULES` array in `src/nlpScanner.ts` and the matching entry in `hookRunner.js`. No other files need to change.
 
-1. Create `src/yourScanner.ts` with a function that calls `callAI()` and returns typed results
-2. Add a new command in `extension.ts` that calls your scanner and passes results to the panel
-3. Add a `showYourResults()` render method in `webviewPanel.ts`
-4. Register the command in `package.json` under `contributes.commands`
-
-To add a new NLP rule, add an entry to the `RULES` array in `src/nlpScanner.ts` (and the matching entry in `hookRunner.js`). No other files need to change.
-
-To add a new AI provider, add a `callYourProvider()` function in `src/aiClient.ts`, a new case in the `callAI()` switch, and the matching entry in `hookRunner.js`.
+To add a new AI provider, add a `callYourProvider()` function in `src/aiClient.ts`, a new `case` in the `callAI()` switch, and the matching implementation in `hookRunner.js`.
 
 ### Build commands
 
@@ -229,5 +250,5 @@ npm run package    # build and package as .vsix for distribution
 
 - **TypeScript** + VS Code Extension API
 - **Multi-provider AI** via direct HTTPS — no backend, no SDK dependencies
-- **Local NLP** via regex — no external NLP library needed
+- **Local NLP** via regex + Shannon entropy — no external NLP library
 - No runtime dependencies beyond VS Code types and Node built-ins

@@ -116,9 +116,10 @@ const LOW_RISK_PATHS = [
   /fixture/, /mock/, /stub/, /fake/,
   /migration/, /seed/, /changelog/, /license/, /readme/,
   /\.stories\./, /storybook/, /node_modules/,
-  /test.fixture/, /test-fixture/,
-  /hookrunner/,
-  /webpack\.config/, /jest\.config/, /babel\.config/, /vite\.config/,
+  /test.fixture/, /test-fixture/,   // test fixture dirs — examples, not real code
+  /hookrunner/,                     // extension infra, not application code
+  /webpack\.config/, /jest\.config/, /babel\.config/, /vite\.config/, /rollup\.config/,
+  /nlpscanner/, /diffscanner/, /filecache/, /aiclient/, /hookinstaller/, // extension source
 ];
 
 function getPathRisk(filePath) {
