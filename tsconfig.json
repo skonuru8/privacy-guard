@@ -10,5 +10,5 @@
     "lib": ["ES2020"],
     "types": ["node", "vscode"]
   },
-  "exclude": ["node_modules", ".vscode-test"]
+  "exclude": ["node_modules", ".vscode-test", "src/test", "test-fixtures"]
 }
