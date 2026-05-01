@@ -185,10 +185,16 @@ function shannonEntropy(str) {
 }
 
 const EXAMPLE_ALLOWLIST = [
+  // API key examples
   "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI", "sk-invalidkey", "sk-abc123",
   "your-key-here", "your_api_key", "your-api-key", "INSERT_KEY", "INSERT_YOUR",
   "YOUR_KEY", "YOUR_API", "PLACEHOLDER", "EXAMPLE", "test-key", "fake-key",
   "dummy-key", "sample-key", "xxxx", "1234567890",
+  // PII placeholders / reserved test values
+  "@EXAMPLE.COM", "@EXAMPLE.ORG", "@TEST.COM", "@LOCALHOST", "USER@EXAMPLE",
+  "FOO@BAR", "JOHN.DOE@", "JANE.DOE@",
+  "555-0100", "555-0199", "555-1234", "(555)",
+  "000-00-0000", "123-45-6789",
 ];
 
 function isExampleValue(line) {
@@ -200,25 +206,25 @@ function isExampleValue(line) {
 
 const NLP_RULES = [
   { id: "sk-key", pattern: /['"]?(sk-[a-zA-Z0-9\-_]{16,})['"]?/, severity: "HIGH",
-    issue: "Hardcoded API key (OpenAI/Stripe pattern) found in source code.",
+    issue: "Hardcoded API key (OpenAI/Stripe/Anthropic pattern) found in source code.",
     fix: "Move to environment variable.", regulation: "GDPR Article 32",
-    checkEntropy: true, minEntropy: 3.2 },
-  { id: "aws-key", pattern: /AKIA[0-9A-Z]{16}/, severity: "HIGH",
-    issue: "Hardcoded AWS Access Key ID found in source code.",
+    checkEntropy: true, minEntropy: 3.2, category: "CREDENTIALS", redactable: true },
+  { id: "aws-key", pattern: /\b(AKIA|AGPA|AIDA|AIPA|ANPA|ANVA|ASIA)[0-9A-Z]{16}\b/, severity: "HIGH",
+    issue: "Hardcoded AWS access key ID found in source code.",
     fix: "Use IAM roles or environment variables. Rotate the key immediately.", regulation: "GDPR Article 32",
-    checkEntropy: false },
+    checkEntropy: false, category: "CREDENTIALS", redactable: true },
   { id: "private-key", pattern: /-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----/, severity: "HIGH",
     issue: "Private key embedded in source code.",
     fix: "Remove immediately. Store in a secrets manager.", regulation: "GDPR Article 32",
-    checkEntropy: false },
+    checkEntropy: false, category: "CREDENTIALS", redactable: true },
   { id: "credentials-in-url", pattern: /:\/\/[^:'"@\s]{1,64}:[^@'":\s]{1,64}@[a-zA-Z0-9.\-]+/, severity: "HIGH",
     issue: "Credentials embedded in a connection URL.",
     fix: "Use environment variables for credentials.", regulation: "GDPR Article 32",
-    checkEntropy: true, minEntropy: 2.5 },
+    checkEntropy: true, minEntropy: 2.5, category: "CREDENTIALS", redactable: true },
   { id: "github-token", pattern: /['"]?(ghp|gho|ghu|ghs|github_pat)_[a-zA-Z0-9]{20,}['"]?/, severity: "HIGH",
     issue: "Hardcoded GitHub token found in source code.",
     fix: "Revoke and use environment variables.", regulation: "GDPR Article 32",
-    checkEntropy: true, minEntropy: 3.5 },
+    checkEntropy: true, minEntropy: 3.5, category: "CREDENTIALS", redactable: true },
   { id: "pii-in-log-field", skipOnDocs: true, pattern: /console\.(log|warn|error|info|debug)\s*\([^)]*\b(email|password|passwd|token|secret|ssn|dob|phone|credit.?card|cvv)\b/i, severity: "HIGH",
     issue: "Sensitive field logged to console.",
     fix: "Remove or redact the sensitive field before logging.", regulation: "GDPR Article 5(1)(f)",
@@ -263,6 +269,127 @@ const NLP_RULES = [
     issue: "Segment analytics call detected.",
     fix: "Ensure consent is obtained. Review Segment destinations.", regulation: "GDPR Article 6",
     checkEntropy: false },
+
+  // ── Ported from privacy-filter (patterns.js). See nlpScanner.ts for rationale
+  // on severity adjustments and dropped rules. Keep these two files in sync.
+
+  // PII (values)
+  { id: "pii-email", pattern: /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/, severity: "MEDIUM",
+    issue: "Hardcoded email address — may be PII.",
+    fix: "Replace with a placeholder (user@example.com) or load from config.", regulation: "GDPR Article 5(1)(c)",
+    checkEntropy: false, category: "PII", redactable: true },
+  { id: "pii-phone-us", pattern: /(\+1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/, severity: "MEDIUM",
+    issue: "US-format phone number found in source code.",
+    fix: "Remove or replace with reserved test number (e.g. 555-0100).", regulation: "GDPR Article 5(1)(c)",
+    checkEntropy: false, category: "PII", redactable: true },
+  { id: "pii-ssn", pattern: /\b\d{3}[-\s]?\d{2}[-\s]?\d{4}\b/, severity: "HIGH",
+    issue: "Possible Social Security Number found in source.",
+    fix: "Never hardcode SSNs. Use tokenized synthetic values.", regulation: "GDPR Article 9 / CCPA 1798.140",
+    checkEntropy: false, category: "PII", redactable: true },
+  { id: "pii-dob", pattern: /\b(dob|date.of.birth|birth.?date)\s*[:=]\s*["']?\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}/i, severity: "HIGH",
+    issue: "Date-of-birth value assigned in source code.",
+    fix: "Use anonymised synthetic test data.", regulation: "GDPR Article 9",
+    checkEntropy: false, category: "PII", redactable: true },
+  { id: "pii-passport", pattern: /\b(passport|national.?id|id.?number)\s*[:=]\s*["']?[A-Z0-9]{6,12}/i, severity: "HIGH",
+    issue: "Passport or national ID number assigned in source.",
+    fix: "Identity document numbers must never appear in source.", regulation: "GDPR Article 9",
+    checkEntropy: false, category: "PII", redactable: true },
+  { id: "pii-gps", pattern: /[-+]?([1-8]?\d(\.\d+)?|90(\.0+)?),\s*[-+]?(180(\.0+)?|((1[0-7]\d)|([1-9]?\d))(\.\d+)?)/, severity: "LOW",
+    issue: "GPS coordinates appear in source.",
+    fix: "Move to config or env if these represent a real address.", regulation: "GDPR Article 5(1)(c)",
+    checkEntropy: false, category: "PII", redactable: false },
+  { id: "pii-address", pattern: /\b\d{1,5}\s+[A-Z][a-z]+(\s+[A-Z][a-z]+)*\s+(St|Ave|Blvd|Dr|Rd|Ln|Way|Ct|Pl|Pkwy|Hwy)\b/, severity: "MEDIUM",
+    issue: "Street-address-shaped string found in source.",
+    fix: "Replace street addresses with synthetic test data.", regulation: "GDPR Article 5(1)(c)",
+    checkEntropy: false, category: "PII", redactable: true },
+
+  // Credentials (additions)
+  { id: "cred-generic-secret", pattern: /\b(password|passwd|secret|api_?key|auth_?token|access_?token|client_?secret)\s*[:=]\s*["'][^\s"']{4,}/i, severity: "HIGH",
+    issue: "Generic secret or password assigned to a literal string.",
+    fix: "Move to environment variables or a secrets manager.", regulation: "GDPR Article 32",
+    checkEntropy: true, minEntropy: 2.8, category: "CREDENTIALS", redactable: true },
+  { id: "cred-azure", pattern: /[?&]sig=[A-Za-z0-9%+/=]{20,}|Ocp-Apim-Subscription-Key:\s*[A-Za-z0-9]{32}/, severity: "HIGH",
+    issue: "Azure SAS or subscription key found in source.",
+    fix: "Rotate via Azure portal and use Managed Identity or Key Vault.", regulation: "GDPR Article 32",
+    checkEntropy: false, category: "CREDENTIALS", redactable: true },
+  { id: "cred-aws-secret", pattern: /aws_?secret_?access_?key\s*[:=]\s*["']?[A-Za-z0-9/+=]{40}/i, severity: "HIGH",
+    issue: "AWS secret access key assigned in source.",
+    fix: "Revoke immediately in IAM and rotate.", regulation: "GDPR Article 32",
+    checkEntropy: true, minEntropy: 3.5, category: "CREDENTIALS", redactable: true },
+  { id: "cred-gcp", pattern: /AIza[A-Za-z0-9\-_]{35}/, severity: "HIGH",
+    issue: "Google Cloud / Firebase API key found in source.",
+    fix: "Restrict the key in GCP console and move to Secret Manager.", regulation: "GDPR Article 32",
+    checkEntropy: false, category: "CREDENTIALS", redactable: true },
+  { id: "cred-jwt", pattern: /eyJ[A-Za-z0-9\-_]+\.eyJ[A-Za-z0-9\-_]+\.[A-Za-z0-9\-_.+/=]*/, severity: "HIGH",
+    issue: "Hardcoded JWT token found in source.",
+    fix: "JWTs are revocable credentials — never hardcode them.", regulation: "GDPR Article 32",
+    checkEntropy: false, category: "CREDENTIALS", redactable: true },
+  { id: "cred-ssh-key", pattern: /-----BEGIN OPENSSH PRIVATE KEY-----/, severity: "HIGH",
+    issue: "SSH private key block found in source.",
+    fix: "SSH private keys belong in ~/.ssh, not in source.", regulation: "GDPR Article 32",
+    checkEntropy: false, category: "CREDENTIALS", redactable: true },
+  { id: "cred-bearer", pattern: /\bAuthorization\s*[:=]\s*["']?Bearer\s+[A-Za-z0-9\-_.~+/=]{20,}/i, severity: "HIGH",
+    issue: "Bearer token hardcoded in source.",
+    fix: "Inject Authorization headers at runtime from env.", regulation: "GDPR Article 32",
+    checkEntropy: true, minEntropy: 3.0, category: "CREDENTIALS", redactable: true },
+  { id: "cred-encryption-key", pattern: /\b(encryption_?key|aes_?key|secret_?key|iv|initialization_?vector)\s*[:=]\s*["'][A-Fa-f0-9]{16,}/i, severity: "HIGH",
+    issue: "Encryption key or IV assigned to a literal value.",
+    fix: "Encryption keys must be managed by KMS/HSM.", regulation: "GDPR Article 32",
+    checkEntropy: true, minEntropy: 3.5, category: "CREDENTIALS", redactable: true },
+
+  // Network
+  { id: "net-private-ip", pattern: /\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3})\b/, severity: "MEDIUM",
+    issue: "RFC 1918 private IP address hardcoded — exposes internal topology.",
+    fix: "Use hostnames or environment configuration.", regulation: "GDPR Article 32",
+    checkEntropy: false, category: "NETWORK", redactable: true },
+  { id: "net-localhost-port", pattern: /\b(127\.0\.0\.1|localhost):\d{4,5}\b/, severity: "LOW",
+    issue: "localhost / 127.0.0.1 with port — fine in dev, risky in prod builds.",
+    fix: "Move dev URLs into config.", regulation: null,
+    checkEntropy: false, category: "NETWORK", redactable: false },
+  { id: "net-internal-url", pattern: /https?:\/\/(internal|intra|corp|dev|staging|admin|vpn|private)\.[a-zA-Z0-9.\-]+/i, severity: "MEDIUM",
+    issue: "Internal/non-public hostname found in source — reveals infrastructure.",
+    fix: "Move internal URLs to environment configuration.", regulation: "GDPR Article 32",
+    checkEntropy: false, category: "NETWORK", redactable: true },
+  { id: "net-webhook-url", pattern: /https?:\/\/[^\s"']+\/webhook\/[A-Za-z0-9\-_]{10,}/i, severity: "MEDIUM",
+    issue: "Webhook URL with token in path — token is an effective credential.",
+    fix: "Move webhook tokens to environment variables.", regulation: "GDPR Article 32",
+    checkEntropy: true, minEntropy: 3.0, category: "NETWORK", redactable: true },
+
+  // Business / IP
+  { id: "biz-todo-sensitive", skipOnDocs: true, pattern: /\b(TODO|FIXME|HACK|XXX)\b.*\b(password|secret|key|credential|ssn|credit.?card|internal|confidential)/i, severity: "MEDIUM",
+    issue: "TODO/FIXME comment references sensitive material.",
+    fix: "Resolve before sharing the file.", regulation: null,
+    checkEntropy: false, category: "BUSINESS", redactable: false },
+  { id: "biz-commented-cred", skipOnDocs: true, pattern: /\/\/.*\b(password|api.?key|secret|token)\s*[:=]\s*["']?\S+/i, severity: "HIGH",
+    issue: "Commented-out credential or key — still a leak.",
+    fix: "Delete the line entirely.", regulation: "GDPR Article 32",
+    checkEntropy: false, category: "BUSINESS", redactable: true },
+  { id: "biz-contract-number", pattern: /\b(contract|purchase.?order|PO|invoice)\b\s*#?\s*[A-Z0-9\-]{5,}/i, severity: "MEDIUM",
+    issue: "Contract / PO / invoice number found in source.",
+    fix: "Business document IDs are confidential.", regulation: null,
+    checkEntropy: false, category: "BUSINESS", redactable: true },
+  { id: "ip-algo-comment", pattern: /\/\/\s*(proprietary|trade.?secret|confidential|do not (share|distribute|copy))/i, severity: "MEDIUM",
+    issue: "Comment marks code as proprietary/confidential.",
+    fix: "Do not send to third-party LLMs without legal review.", regulation: null,
+    checkEntropy: false, category: "IP", redactable: false },
+  { id: "ip-license-key", pattern: /\b(license.?key|serial.?key|activation.?code)\s*[:=]\s*["']?[A-Z0-9\-]{10,}/i, severity: "HIGH",
+    issue: "License or serial key assigned in source.",
+    fix: "License keys are transferable credentials.", regulation: null,
+    checkEntropy: true, minEntropy: 2.8, category: "IP", redactable: true },
+
+  // PHI
+  { id: "phi-mrn", pattern: /\b(mrn|medical.?record.?number|patient.?id)\s*[:=]\s*["']?\d{5,}/i, severity: "HIGH",
+    issue: "Medical record number assigned in source — HIPAA-regulated PHI.",
+    fix: "Use anonymised synthetic data in tests.", regulation: "HIPAA 45 CFR 164.514",
+    checkEntropy: false, category: "PHI", redactable: true },
+  { id: "phi-diagnosis", pattern: /\b(diagnosis|icd.?10|icd.?9|condition)\s*[:=]\s*["'][A-Z]\d{2,}/i, severity: "HIGH",
+    issue: "ICD diagnosis code assigned in source — may constitute PHI.",
+    fix: "Remove or anonymise.", regulation: "HIPAA 45 CFR 164.514",
+    checkEntropy: false, category: "PHI", redactable: true },
+  { id: "phi-npi", pattern: /\bNPI\s*[:=]\s*["']?\d{10}\b/i, severity: "HIGH",
+    issue: "National Provider Identifier (NPI) assigned in source.",
+    fix: "Use synthetic NPI values in tests.", regulation: "HIPAA 45 CFR 164.514",
+    checkEntropy: false, category: "PHI", redactable: true },
 ];
 
 function runNlp(filePath, diffContent, docFile = false) {
@@ -362,11 +489,109 @@ function callOpenRouter(apiKey, model, filePath, diff) {
     body, p => { if (p.error) throw new Error(p.error.message); return p.choices[0].message.content; });
 }
 
+// ── Outbound prompt redaction ─────────────────────────────────────────────────
+//
+// Mirrors redactSensitive() in src/nlpScanner.ts — keep the two in sync.
+// Scrubs sensitive values from the diff before sending it to a third-party LLM.
+// Mode is controlled by the PRIVACY_GUARD_OUTBOUND_FILTER env var (redact|block|warn|off);
+// defaults to "redact". The hook can't read VS Code settings so it uses env vars.
+
+function isSafeEnvRef(line) {
+  return /process\.env\.|os\.getenv\(|os\.environ|ENV\[|getenv\(|config\.|secrets\.|vault\./.test(line);
+}
+
+function redactSensitive(text) {
+  if (!text) return { redacted: text, findings: [], hasHigh: false };
+
+  const findings = [];
+  const lines = text.split("\n");
+
+  for (const rule of NLP_RULES) {
+    if (!rule.redactable) continue;
+    const flags = rule.pattern.flags.includes("g") ? rule.pattern.flags : rule.pattern.flags + "g";
+    const globalPattern = new RegExp(rule.pattern.source, flags);
+
+    for (const line of lines) {
+      if (isSafeEnvRef(line)) continue;
+      if (isExampleValue(line)) continue;
+
+      let m;
+      globalPattern.lastIndex = 0;
+      while ((m = globalPattern.exec(line)) !== null) {
+        const matched = m[0];
+        if (rule.checkEntropy && rule.minEntropy !== undefined) {
+          const candidate = matched.replace(/['"]/g, "").trim();
+          if (candidate && shannonEntropy(candidate) < rule.minEntropy) {
+            if (matched.length === 0) globalPattern.lastIndex++;
+            continue;
+          }
+        }
+        findings.push({ ruleId: rule.id, severity: rule.severity, matchedText: matched });
+        if (matched.length === 0) globalPattern.lastIndex++;
+      }
+    }
+  }
+
+  // Specific rules first, then generic — see nlpScanner.ts for rationale.
+  const GENERIC_RULES = new Set(["cred-generic-secret"]);
+  const isGeneric = (id) => GENERIC_RULES.has(id);
+  const sorted = [...findings].sort((a, b) => {
+    const aGen = isGeneric(a.ruleId);
+    const bGen = isGeneric(b.ruleId);
+    if (aGen !== bGen) return aGen ? 1 : -1;
+    return b.matchedText.length - a.matchedText.length;
+  });
+
+  let redacted = text;
+  const seen = new Set();
+  for (const f of sorted) {
+    if (seen.has(f.matchedText)) continue;
+    if (!redacted.includes(f.matchedText)) continue;
+    redacted = redacted.split(f.matchedText).join(`[REDACTED:${f.ruleId}]`);
+    seen.add(f.matchedText);
+  }
+
+  return { redacted, findings, hasHigh: findings.some(f => f.severity === "HIGH") };
+}
+
+function applyOutboundFilter(diff) {
+  const mode = (process.env.PRIVACY_GUARD_OUTBOUND_FILTER || "redact").toLowerCase();
+  if (mode === "off") return diff;
+
+  const result = redactSensitive(diff);
+  if (result.findings.length === 0) return diff;
+
+  const ruleSummary = [...new Set(result.findings.map(f => f.ruleId))].join(", ");
+
+  if (mode === "block" && result.hasHigh) {
+    // Caller catches and falls back to NLP-only result — never block the commit on filter alone
+    const err = new Error(
+      `Privacy Guard refused to send prompt: ${result.findings.length} sensitive value(s) (${ruleSummary}). ` +
+      `Set PRIVACY_GUARD_OUTBOUND_FILTER=redact to send a scrubbed version.`
+    );
+    err.outboundBlocked = true;
+    throw err;
+  }
+  if (mode === "warn") {
+    process.stderr.write(
+      `Privacy Guard: outbound prompt contains ${result.findings.length} sensitive value(s) (${ruleSummary}) — sent unchanged (warn mode).\n`
+    );
+    return diff;
+  }
+  // redact (default), or block-with-no-HIGH
+  process.stderr.write(
+    `Privacy Guard: redacted ${result.findings.length} value(s) from outbound prompt (${ruleSummary}).\n`
+  );
+  return result.redacted;
+}
+
 function callLLM(provider, apiKey, openRouterModel, filePath, diff) {
+  // Self-defense: scrub the diff before it leaves the machine.
+  const safeDiff = applyOutboundFilter(diff);
   switch (provider) {
-    case "openai":     return callOpenAI(apiKey, filePath, diff);
-    case "openrouter": return callOpenRouter(apiKey, openRouterModel, filePath, diff);
-    default:           return callAnthropic(apiKey, filePath, diff);
+    case "openai":     return callOpenAI(apiKey, filePath, safeDiff);
+    case "openrouter": return callOpenRouter(apiKey, openRouterModel, filePath, safeDiff);
+    default:           return callAnthropic(apiKey, filePath, safeDiff);
   }
 }
 

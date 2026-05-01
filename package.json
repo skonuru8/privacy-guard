@@ -75,6 +75,23 @@
           "type": "string",
           "default": "mistralai/mistral-7b-instruct",
           "description": "Model slug to use when provider is openrouter. See openrouter.ai/models for the full list."
+        },
+        "privacyGuard.outboundFilterMode": {
+          "type": "string",
+          "enum": [
+            "redact",
+            "block",
+            "warn",
+            "off"
+          ],
+          "default": "redact",
+          "description": "Self-defense for Privacy Guard's own LLM calls. Controls what happens when the diff Privacy Guard is about to send to the AI provider itself contains sensitive values.",
+          "enumDescriptions": [
+            "Replace sensitive values with [REDACTED:RULE-ID] tokens before sending (recommended).",
+            "Refuse to call the AI when a HIGH-severity match is found; fall back to NLP-only result.",
+            "Send the prompt unchanged but show a warning notification listing what was sent.",
+            "Send the prompt as-is with no filtering (not recommended)."
+          ]
         }
       }
     },

@@ -1,8 +1,79 @@
 import * as https from "https";
 import * as vscode from "vscode";
+import { redactSensitive, RedactionResult } from "./nlpScanner";
 
 /** Supported AI providers. Add new entries here to extend support. */
 export type AIProvider = "anthropic" | "openai" | "openrouter";
+
+/**
+ * Outbound prompt filter mode — read from the `privacyGuard.outboundFilterMode` setting.
+ *
+ *   redact (default) — replace sensitive matches with [REDACTED:RULE-ID] tokens
+ *                      before sending. The LLM still sees the structure of the
+ *                      diff but never the actual secret.
+ *   block            — refuse to call the LLM at all if a HIGH-severity match
+ *                      is found. Caller falls back to the NLP-only result.
+ *   warn             — send the original prompt unchanged but show the user a
+ *                      notification listing what was about to leave the machine.
+ *   off              — pre-existing behavior; send the prompt as-is, no checks.
+ */
+type OutboundMode = "redact" | "block" | "warn" | "off";
+
+/** Thrown when mode = "block" and a HIGH-severity finding is detected. */
+export class OutboundBlockedError extends Error {
+  constructor(public readonly result: RedactionResult) {
+    super(
+      `Privacy Guard refused to send prompt: contains ${result.findings.length} sensitive value(s) ` +
+      `(${result.findings.map((f) => f.ruleId).join(", ")}). ` +
+      `Change privacyGuard.outboundFilterMode to "redact" to send a scrubbed version instead.`
+    );
+    this.name = "OutboundBlockedError";
+  }
+}
+
+/**
+ * Reads the configured outbound mode and applies it to the given prompt text.
+ * Returns the (possibly transformed) text that should actually be sent.
+ *
+ * Side effects: surfaces a VS Code notification when something was redacted
+ * or when the mode is "warn" and findings exist. Notifications are best-effort
+ * and never throw — they are skipped silently in non-VS Code contexts.
+ */
+function applyOutboundFilter(text: string): string {
+  const config = vscode.workspace.getConfiguration("privacyGuard");
+  const mode = config.get<OutboundMode>("outboundFilterMode", "redact");
+
+  if (mode === "off") return text;
+
+  const result = redactSensitive(text);
+  if (result.findings.length === 0) return text;
+
+  const ruleSummary = [...new Set(result.findings.map((f) => f.ruleId))].join(", ");
+
+  switch (mode) {
+    case "block":
+      if (result.hasHigh) throw new OutboundBlockedError(result);
+      // No HIGH match — fall through and behave like redact for medium/low matches.
+      vscode.window.showWarningMessage(
+        `Privacy Guard redacted ${result.findings.length} value(s) from outbound LLM prompt: ${ruleSummary}`
+      );
+      return result.redacted;
+
+    case "warn":
+      vscode.window.showWarningMessage(
+        `Privacy Guard: outbound prompt contains ${result.findings.length} sensitive value(s) ` +
+        `(${ruleSummary}) — sent unchanged because outboundFilterMode is "warn".`
+      );
+      return text;
+
+    case "redact":
+    default:
+      vscode.window.showInformationMessage(
+        `Privacy Guard redacted ${result.findings.length} value(s) from outbound LLM prompt: ${ruleSummary}`
+      );
+      return result.redacted;
+  }
+}
 
 /**
  * Reads the configured AI provider and its corresponding API key from VS Code settings.
@@ -53,13 +124,19 @@ export async function callAI(
   systemPrompt: string,
   userMessage: string
 ): Promise<string> {
+  // Self-defense: scrub sensitive values from the user message before it leaves
+  // this process. The system prompt is static and Privacy-Guard-authored, so
+  // it's exempt from filtering. Throws OutboundBlockedError if the configured
+  // mode is "block" and a HIGH-severity match was found.
+  const safeUserMessage = applyOutboundFilter(userMessage);
+
   switch (provider) {
     case "anthropic":
-      return callAnthropic(apiKey, systemPrompt, userMessage);
+      return callAnthropic(apiKey, systemPrompt, safeUserMessage);
     case "openai":
-      return callOpenAI(apiKey, systemPrompt, userMessage);
+      return callOpenAI(apiKey, systemPrompt, safeUserMessage);
     case "openrouter":
-      return callOpenRouter(apiKey, systemPrompt, userMessage);
+      return callOpenRouter(apiKey, systemPrompt, safeUserMessage);
     default:
       throw new Error(`Unknown provider: ${provider}`);
   }
