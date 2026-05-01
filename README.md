@@ -31,28 +31,36 @@ Every commit runs through a 5-layer pipeline designed to scan every file complet
 
 **What the NLP layer catches without an API call:**
 
-| Pattern | Severity |
-|---|---|
-| Hardcoded OpenAI / Stripe keys (`sk-...`) | HIGH |
-| AWS Access Key IDs (`AKIA...`) | HIGH |
-| Private keys (`-----BEGIN RSA PRIVATE KEY`) | HIGH |
-| Credentials in connection URLs (`user:pass@host`) | HIGH |
-| GitHub tokens (`ghp_...`, `github_pat_...`) | HIGH |
-| PII fields in `console.log` (email, password, ssn, token) | HIGH |
-| Template literals logging PII (`` `user=${user.email}` ``) | HIGH |
-| Raw password from request body stored without hashing | HIGH |
-| Geolocation accessed without visible consent check | MEDIUM |
-| `fetch()` or `axios` calls over `http://` | MEDIUM |
-| Google Analytics, Mixpanel, Amplitude, Segment calls | MEDIUM |
+The local rule set covers six categories — credentials, PII, network, business/IP, PHI, and code-shape patterns. A representative sample below; the complete list lives in `src/nlpScanner.ts`.
+
+| Category | Examples | Severity |
+|---|---|---|
+| **Credentials** | OpenAI / Stripe / Anthropic keys (`sk-...`), AWS access keys (all six IAM prefixes), GCP / Firebase keys (`AIza...`), GitHub tokens (`ghp_...`, `github_pat_...`), JWTs, SSH/PEM private keys, Azure SAS tokens, bearer tokens, encryption keys, generic `password=`/`secret=` assignments, credentials in connection URLs | HIGH |
+| **PII** | Hardcoded SSNs, dates of birth, passport / national-ID numbers | HIGH |
+| **PII** | Email addresses, US phone numbers, street addresses | MEDIUM |
+| **PII** | GPS coordinates | LOW |
+| **Network** | Internal hostnames (`*.corp.*`, `*.staging.*`), webhook URLs with tokens in the path | MEDIUM |
+| **Network** | RFC 1918 private IPs (10/8, 172.16/12, 192.168/16) | MEDIUM |
+| **Network** | localhost / 127.0.0.1 with port | LOW |
+| **Business / IP** | Commented-out credentials, license / serial keys | HIGH |
+| **Business / IP** | Sensitive `TODO`/`FIXME` comments, contract / PO / invoice numbers, `// proprietary` / `// trade secret` markers | MEDIUM |
+| **PHI (HIPAA)** | Medical record numbers, ICD-10 diagnosis codes, NPI numbers | HIGH |
+| **Code-shape (logging / transport)** | PII fields in `console.log` (email, password, ssn, token), template literals logging `${user.email}`, raw password from `req.body` stored without hashing | HIGH |
+| **Code-shape (logging / transport)** | Geolocation accessed without a consent check, `fetch()` / `axios` calls over `http://`, Google Analytics / Mixpanel / Amplitude / Segment calls | MEDIUM |
+
+The Shannon-entropy filter and the example-value allowlist together suppress common false positives — `user@example.com`, `555-0100`, `123-45-6789`, `sk-invalidkey...`, `AKIAIOSFODNN7EXAMPLE`, and similar reserved test values pass through unflagged.
 
 **What gets flagged:**
-- PII collected or logged (names, emails, phone numbers, location data, IDs)
+- PII collected, logged, or hardcoded (names, emails, phone numbers, addresses, SSNs, dates of birth, passport / national-ID numbers, GPS coordinates)
 - Sensitive data in logs or error messages (passwords, tokens, health data, financial data)
-- Hardcoded secrets and API keys
+- Hardcoded secrets and API keys (OpenAI, Anthropic, AWS, GCP, Azure, GitHub, JWTs, SSH/PEM private keys)
+- Internal infrastructure exposure (private IPs, internal hostnames, webhook tokens)
+- PHI under HIPAA (medical record numbers, ICD diagnosis codes, NPIs)
+- Intellectual-property leakage (commented-out credentials, license keys, code marked proprietary or confidential)
 - Third-party API calls that share user data without consent
 - Missing consent checks before data collection
 - Insecure data transmission (HTTP instead of HTTPS)
-- Relevant GDPR article or CCPA section for each issue
+- Relevant GDPR article, CCPA section, or HIPAA citation for each issue
 
 Each issue is given a severity of `LOW`, `MEDIUM`, or `HIGH`. The commit is blocked only if the overall risk is `HIGH`. If the API is unreachable or the check fails for any reason, the commit always proceeds.
 
@@ -79,6 +87,45 @@ Issue 1 — auth.js [HIGH]
 ```
 
 > **Note:** If you intentionally commit files that contain example privacy violations (such as test fixtures), use `git commit --no-verify` to bypass the hook. The scanner correctly identifies these as issues — bypassing is the right approach for known-bad example files.
+
+---
+
+### 🛡 Self-Defense — Outbound Prompt Filter
+
+Privacy Guard sends file diffs to a third-party LLM as part of its analysis pipeline. Without the outbound filter, a diff containing a real OpenAI key, AWS secret, or customer email would be transmitted in plaintext to Anthropic, OpenAI, or whichever OpenRouter model you've selected — defeating the purpose of running the check at all.
+
+The outbound filter closes that hole. Every prompt the extension is about to send is scrubbed first using the same rule set that scans your code, so the analyzer sees `[REDACTED:sk-key]` instead of the actual key. The structure of the diff is preserved well enough for the LLM to still reason about it ("there's a credential on line 14 — is the surrounding code handling it correctly?") without the secret ever leaving the machine.
+
+Only value-bearing rules participate (rules tagged `redactable: true` in `nlpScanner.ts`). Code-shape rules like "console.log contains an email field" are excluded — there's nothing to redact, the issue is the call site itself.
+
+**Modes** — set via `privacyGuard.outboundFilterMode`:
+
+| Mode | Behavior |
+|---|---|
+| `redact` (default) | Sensitive matches are replaced with `[REDACTED:RULE-ID]` tokens. The (scrubbed) prompt is sent. A status notification lists what was scrubbed. |
+| `block` | If a HIGH-severity match is found, the LLM call is refused entirely; the file's NLP-only result is used as the final verdict. Lower-severity matches are still redacted. |
+| `warn` | The original prompt is sent unchanged, but a warning notification lists what just left the machine. Useful when you want full LLM fidelity and accept the tradeoff. |
+| `off` | No filtering at all. Pre-existing behavior. |
+
+**Safe references are never redacted.** Lines accessing values via `process.env.*`, `os.getenv(...)`, `config.*`, `secrets.*`, or `vault.*` pass through untouched — the *correct* way to handle a secret should never be flagged as the leak.
+
+**Standalone hook (`hookRunner.js`)** has the same protection. Because it runs without VS Code, it reads its mode from the `PRIVACY_GUARD_OUTBOUND_FILTER` environment variable instead of VS Code settings (default: `redact`). Filter activity is logged to stderr so it doesn't pollute the hook's normal output.
+
+**Example** — a diff containing this code:
+```js
+const apiKey = "sk-x7Kp9mQ2vN4tR8wL3jH6yD1bF5gZ0cVaB";
+const dbUrl  = "postgres://admin:hunter2@db.internal:5432/prod";
+const email  = "alice@company.com";
+const safe   = process.env.OPENAI_API_KEY;
+```
+
+…is transformed before sending to:
+```js
+const apiKey = [REDACTED:sk-key];
+const dbUrl  = "postgres[REDACTED:credentials-in-url]:5432/prod";
+const email  = "[REDACTED:pii-email]";
+const safe   = process.env.OPENAI_API_KEY;
+```
 
 ---
 
@@ -166,6 +213,7 @@ All settings are under `privacyGuard.*` in VS Code Settings (`Ctrl+Shift+P` → 
 | `privacyGuard.openaiApiKey` | `string` | — | OpenAI API key — [platform.openai.com](https://platform.openai.com/api-keys) |
 | `privacyGuard.openrouterApiKey` | `string` | — | OpenRouter API key — [openrouter.ai/keys](https://openrouter.ai/keys) |
 | `privacyGuard.openRouterModel` | `string` | `mistralai/mistral-7b-instruct` | Model slug when using OpenRouter |
+| `privacyGuard.outboundFilterMode` | `string` | `redact` | Self-defense for outbound LLM prompts. One of `redact`, `block`, `warn`, `off`. See the Self-Defense section above. |
 
 All three key fields can be filled simultaneously. Switching the `provider` dropdown picks up the correct key automatically.
 
@@ -206,6 +254,9 @@ Useful OpenRouter model slugs:
 export PRIVACY_GUARD_PROVIDER=openrouter
 export PRIVACY_GUARD_API_KEY=sk-or-...
 export PRIVACY_GUARD_OPENROUTER_MODEL=deepseek/deepseek-r1-0528
+
+# Optional: control the outbound prompt filter (default: redact)
+export PRIVACY_GUARD_OUTBOUND_FILTER=redact   # redact | block | warn | off
 ```
 
 ---
@@ -232,9 +283,33 @@ privacy-guard/
 
 ## Contributing
 
-To add a new NLP rule, add an entry to the `RULES` array in `src/nlpScanner.ts` and the matching entry in `hookRunner.js`. No other files need to change.
+### Adding a new NLP rule
 
-To add a new AI provider, add a `callYourProvider()` function in `src/aiClient.ts`, a new `case` in the `callAI()` switch, and the matching implementation in `hookRunner.js`.
+Each rule must be added in **two places** — `src/nlpScanner.ts` (used by the VS Code extension) and `hookRunner.js` (used by the standalone git hook). Keep both copies identical.
+
+A rule object has these fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | ✓ | Unique rule identifier; appears in `[REDACTED:RULE-ID]` tokens |
+| `pattern` | ✓ | `RegExp` matched against added (`+`) lines of each diff |
+| `severity` | ✓ | `LOW` / `MEDIUM` / `HIGH` — only HIGH blocks a commit |
+| `issue` | ✓ | One-line explanation shown to the developer |
+| `fix` | ✓ | Concrete remediation suggestion |
+| `regulation` | ✓ | GDPR / CCPA / HIPAA citation, or `null` |
+| `checkEntropy` | – | If `true`, run Shannon entropy on the match before flagging |
+| `minEntropy` | – | Minimum entropy to flag — strings below this are treated as examples |
+| `skipOnDocs` | – | If `true`, skip this rule on `.md` / `.txt` / `.rst` files |
+| `category` | – | One of `PII` / `CREDENTIALS` / `NETWORK` / `BUSINESS` / `IP` / `PHI` / `GENERAL` |
+| `redactable` | – | If `true`, this rule's matches are scrubbed from outbound LLM prompts (see Self-Defense). Only set on **value-bearing** rules — a rule like "console.log contains an email field" should leave this off |
+
+### Adding a new AI provider
+
+Add a `callYourProvider()` function in `src/aiClient.ts`, a new `case` in the `callAI()` switch, and the matching implementation in `hookRunner.js`. The outbound filter is applied centrally in `callAI()` so new providers inherit it automatically.
+
+### Known: rule duplication
+
+Rules currently live in two files (`src/nlpScanner.ts` and `hookRunner.js`) with the same shape. Extracting the rule registry into a shared package is on the roadmap; until then, every rule change has to be made in both places.
 
 ### Build commands
 
