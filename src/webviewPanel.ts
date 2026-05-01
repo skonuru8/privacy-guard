@@ -18,7 +18,7 @@ export class PrivacyGuardPanel {
         case "openSettings":
           vscode.commands.executeCommand(
             "workbench.action.openSettings",
-            "privacyGuard.apiKey"
+            "privacyGuard"
           );
           break;
         case "runCommand":
