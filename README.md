@@ -2,7 +2,15 @@
 
 AI-powered privacy analysis built into your development workflow. Catches privacy issues in your code changes and dependencies before they ship, with support for multiple AI providers.
 
+> **Note:** This extension requires the latest version of VS Code and the latest LTS release of Node.js. Using older versions may result in unexpected behaviour or failed builds.
+
 ---
+
+## Contributors
+
+- Sri Lasya Siripurapu
+- Kedar Naik
+- Sri Sai Sarath Chandra Konuru
 
 ## Features
 
@@ -212,20 +220,22 @@ All settings are under `privacyGuard.*` in VS Code Settings (`Ctrl+Shift+P` → 
 | `privacyGuard.anthropicApiKey` | `string` | — | Anthropic API key — [console.anthropic.com](https://console.anthropic.com) |
 | `privacyGuard.openaiApiKey` | `string` | — | OpenAI API key — [platform.openai.com](https://platform.openai.com/api-keys) |
 | `privacyGuard.openrouterApiKey` | `string` | — | OpenRouter API key — [openrouter.ai/keys](https://openrouter.ai/keys) |
-| `privacyGuard.openRouterModel` | `string` | `mistralai/mistral-7b-instruct` | Model slug when using OpenRouter |
+| `privacyGuard.anthropicModel` | `string` | `claude-sonnet-4-20250514` | Model ID when using Anthropic. See [docs.anthropic.com/en/docs/about-claude/models](https://docs.anthropic.com/en/docs/about-claude/models) for available models. |
+| `privacyGuard.openaiModel` | `string` | `gpt-4o` | Model ID when using OpenAI. See [platform.openai.com/docs/models](https://platform.openai.com/docs/models) for available models. |
+| `privacyGuard.openRouterModel` | `string` | `mistralai/mistral-7b-instruct` | Model slug when using OpenRouter. See [openrouter.ai/models](https://openrouter.ai/models). |
 | `privacyGuard.outboundFilterMode` | `string` | `redact` | Self-defense for outbound LLM prompts. One of `redact`, `block`, `warn`, `off`. See the Self-Defense section above. |
 
 All three key fields can be filled simultaneously. Switching the `provider` dropdown picks up the correct key automatically.
 
 ### Supported Providers
 
-**Anthropic** (default) — uses `claude-sonnet-4-20250514`
+**Anthropic** (default) — uses `claude-sonnet-4-20250514` by default; override with `privacyGuard.anthropicModel`
 ```
 privacyGuard.provider        →  anthropic
 privacyGuard.anthropicApiKey →  sk-ant-...
 ```
 
-**OpenAI** — uses `gpt-4o`
+**OpenAI** — uses `gpt-4o` by default; override with `privacyGuard.openaiModel`
 ```
 privacyGuard.provider     →  openai
 privacyGuard.openaiApiKey →  sk-...
@@ -273,8 +283,20 @@ privacy-guard/
 │   ├── fileCache.ts        — sha256 diff cache stored in .git/privacy-guard-cache.json
 │   ├── packageScanner.ts   — reads package.json and scores dependencies
 │   ├── hookInstaller.ts    — installs/uninstalls the git pre-commit hook
-│   └── webviewPanel.ts     — sidebar UI rendered as an HTML webview
+│   ├── webviewPanel.ts     — sidebar UI rendered as an HTML webview
+│   └── test/
+│       ├── __mocks__/
+│       │   └── vscode.ts   — VS Code API stub for Jest
+│       ├── nlpScanner.test.ts
+│       ├── diffScanner.test.ts
+│       ├── fileCache.test.ts
+│       ├── packageScanner.test.ts
+│       └── hookInstaller.test.ts
+├── test-fixtures/
+│   ├── hookRunner.fixture.test.js   — integration tests for the standalone hook
+│   └── packageScanner.fixture.test.js
 ├── hookRunner.js           — standalone Node script called by the git hook at commit time
+├── jest.config.js          — Jest configuration (ts-jest, vscode mock, test globs)
 ├── package.json            — extension manifest, commands, and settings schema
 └── tsconfig.json
 ```
@@ -314,9 +336,14 @@ Rules currently live in two files (`src/nlpScanner.ts` and `hookRunner.js`) with
 ### Build commands
 
 ```bash
-npm run compile    # compile TypeScript once
-npm run watch      # auto-compile on every save
-npm run package    # build and package as .vsix for distribution
+npm run compile        # compile TypeScript once
+npm run watch          # auto-compile on every save
+npm run package        # build and package as .vsix for distribution
+npm test               # run full Jest test suite
+npm run test:watch     # re-run tests on every save
+npm run test:coverage  # generate coverage report
+npm run test:unit      # unit tests only (src/test/)
+npm run test:fixtures  # integration tests only (test-fixtures/)
 ```
 
 ---
