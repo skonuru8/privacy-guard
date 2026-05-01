@@ -83,7 +83,7 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.commands.registerCommand("privacyGuard.scanPackages", async () => {
       try {
-        panel.showLoading("Scoring dependencies for privacy risk...");
+        panel.showLoading("Scoring dependencies & fetching privacy reports...");
         const results = await scanPackages();
         panel.showPackageResults(results);
       } catch (err: any) {
