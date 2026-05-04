@@ -1,0 +1,37 @@
+{
+  "name": "privacy-guard",
+  "version": "1.0.0",
+  "description": "Scan code for privacy and security leaks before sending input to any LLM",
+  "main": "llm-wrapper.js",
+  "exports": {
+    ".": "./llm-wrapper.js",
+    "./filter": "./llm-filter.js"
+  },
+  "files": [
+    "llm-wrapper.js",
+    "llm-filter.js",
+    "patterns.js",
+    "scanner.js",
+    "index.js"
+  ],
+  "bin": {
+    "privacy-guard": "./index.js"
+  },
+  "scripts": {
+    "start": "node index.js"
+  },
+  "keywords": [
+    "privacy",
+    "security",
+    "dlp",
+    "llm-safety",
+    "llm",
+    "ai-safety"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "cheerio": "^1.2.0",
+    "dotenv": "^17.4.2",
+    "openai": "^6.35.0"
+  }
+}
