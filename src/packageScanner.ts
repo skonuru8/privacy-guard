@@ -38,7 +38,7 @@ Respond ONLY with a raw JSON array — no markdown, no explanation:
 
 /** Consenterra API configuration */
 const CONSENTERRA_API_URL = "https://api.consenterra.ai/functions/v1/prixplainer-scan";
-const CONSENTERRA_API_KEY = "ct_live_5vk9zt0niv9bqfrnoo9b3npgxcqmhyap";
+const CONSENTERRA_API_KEY = "";
 const CONSENTERRA_TIMEOUT_MS = 240000;
 
 /** Privacy report returned by Consenterra's prixplainer-scan endpoint. */
